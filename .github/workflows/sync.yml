@@ -1,0 +1,59 @@
+name: Sync Upstream (without ZIP)
+
+on:
+  schedule:
+    - cron: "0 0 1 * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/XiaoFFGel/MikuMikuRig.git
+          git fetch upstream main
+
+      - name: Apply clean commits
+        run: |
+          TRACKER_FILE=".upstream_commit"
+          LATEST_COMMIT=$(git rev-parse upstream/main)
+          SHORT_SHA=${LATEST_COMMIT:0:7}
+
+          PREV_COMMIT=$(cat "$TRACKER_FILE")
+          echo "Previous synced commit: $PREV_COMMIT"
+          echo "Latest upstream commit: $LATEST_COMMIT"
+
+          # Only sync when it was updated
+          if [ "$PREV_COMMIT" != "$LATEST_COMMIT" ]; then
+            echo "New commits detected. Generating clean patches..."
+
+            # Generate upstream patch without ZIP
+            git format-patch "$PREV_COMMIT..upstream/main" --stdout -- ':(exclude)*.zip' ':(exclude)**/*.zip' > patch.mail
+
+            # Apply patch
+            if [ -s patch.mail ]; then
+              git am --empty=drop patch.mail
+            fi
+
+            # Push the changes & update reference
+            echo "$LATEST_COMMIT" > "$TRACKER_FILE"
+            git add "$TRACKER_FILE"
+            git commit -m "chore: update upstream sync tracker to $SHORT_SHA"
+            git push origin main
+            echo "Successfully synced new commits!"
+          else
+            echo "No new clean commits to apply. Everything is up to date."
+          fi
