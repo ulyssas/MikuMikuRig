@@ -3,3 +3,7 @@
 /.idea/
 /.workbuddy/
 /.vs/
+
+.vscode/
+*.zip
+**/*.zip
