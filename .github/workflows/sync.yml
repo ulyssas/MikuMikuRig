@@ -30,18 +30,28 @@ jobs:
         run: |
           TRACKER_FILE=".upstream_commit"
           LATEST_COMMIT=$(git rev-parse upstream/main)
-          SHORT_SHA=${LATEST_COMMIT:0:7}
+          MAX_BLEND_SIZE=$((5 * 1024 * 1024)) # 5MB
 
           PREV_COMMIT=$(cat "$TRACKER_FILE")
           echo "Previous synced commit: $PREV_COMMIT"
           echo "Latest upstream commit: $LATEST_COMMIT"
 
-          # Only sync when it was updated
           if [ "$PREV_COMMIT" != "$LATEST_COMMIT" ]; then
-            echo "New commits detected. Generating clean patches..."
+            echo "New commits detected. Analyzing files..."
 
-            # Generate upstream patch without ZIP
-            git format-patch "$PREV_COMMIT..upstream/main" --stdout -- ':(exclude)*.zip' ':(exclude)**/*.zip' > patch.mail
+            EXCLUDE_PATTERNS=(":(exclude)*.zip" ":(exclude)**/*.zip")
+
+            # Exclude 5MB+ .blend
+            while IFS=$'\t' read -r meta filepath; do
+              size=$(echo "$meta" | awk '{print $4}')
+              if [ -n "$size" ] && [ "$size" -gt "$MAX_BLEND_SIZE" ] 2>/dev/null; then
+                echo "Excluding oversized .blend (>5MB): $filepath ($((size / 1024 / 1024))MB)"
+                EXCLUDE_PATTERNS+=(":(exclude)$filepath")
+              fi
+            done < <(git ls-tree -r -l upstream/main | grep -E '\.blend$')
+
+            # Generate upstream patch with --binary (without ZIP)
+            git format-patch --binary "$PREV_COMMIT..upstream/main" --stdout -- "${EXCLUDE_PATTERNS[@]}" > patch.mail
 
             # Apply patch
             if [ -s patch.mail ]; then
@@ -51,7 +61,7 @@ jobs:
             # Push the changes & update reference
             echo "$LATEST_COMMIT" > "$TRACKER_FILE"
             git add "$TRACKER_FILE"
-            git commit -m "chore: update upstream sync tracker to $SHORT_SHA"
+            git commit -m "chore: update upstream sync tracker to ${LATEST_COMMIT:0:7}"
             git push origin main
             echo "Successfully synced new commits!"
           else
